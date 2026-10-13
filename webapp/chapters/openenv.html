@@ -1,0 +1,180 @@
+<!doctype html><html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>框架如何运作 — 多 harness RL 中文版</title><link rel="stylesheet" href="../assets/style.css"><link rel="stylesheet" href="../assets/reading.css"></head><body>
+<header class="topbar"><a class="brand" href="../index.html">多 harness RL 中文版<span>在真实智能体框架中训练模型</span></a><nav class="chapnav"><a href="why-multi-harness.html">← 上一章</a><span class="chapnav-current">第 3 章</span><a href="training.html">下一章 →</a><a href="../full.html">全文</a></nav></header>
+<div class="layout"><aside class="sidebar"><nav class="toc"><h2>阅读目录</h2><ol><li><a href="#how-the-framework-works">框架如何运作</a></li><li><a href="#openenv">OpenEnv</a></li><li><a href="#one-rollout-end-to-end">一次 rollout 的端到端流程</a></li><li><a href="#the-capture-proxy">采集代理</a></li><li><a href="#what-gets-recorded">记录哪些信息</a></li><li><a href="#from-calls-to-training-sequences">从调用构建训练序列</a></li><li><a href="#capturing-your-own-harness">采集你自己的 harness</a></li><li><a href="#harbor">Harbor</a></li><li><a href="#serving-harbor-through-openenv">通过 OpenEnv 提供 Harbor 服务</a></li><li><a href="#the-four-commands">四条命令</a></li><li><a href="#wiring-each-harness">各 harness 如何接线</a></li><li><a href="#picking-the-reward-and-checking-the-capture">选择奖励并检查采集</a></li><li><a href="#deploying-it-and-training-against-it">部署并对其训练</a></li></ol></nav></aside><main class="main"><details class="mobile-toc"><summary>展开阅读目录</summary><ol><li><a href="#how-the-framework-works">框架如何运作</a></li><li><a href="#openenv">OpenEnv</a></li><li><a href="#one-rollout-end-to-end">一次 rollout 的端到端流程</a></li><li><a href="#the-capture-proxy">采集代理</a></li><li><a href="#what-gets-recorded">记录哪些信息</a></li><li><a href="#from-calls-to-training-sequences">从调用构建训练序列</a></li><li><a href="#capturing-your-own-harness">采集你自己的 harness</a></li><li><a href="#harbor">Harbor</a></li><li><a href="#serving-harbor-through-openenv">通过 OpenEnv 提供 Harbor 服务</a></li><li><a href="#the-four-commands">四条命令</a></li><li><a href="#wiring-each-harness">各 harness 如何接线</a></li><li><a href="#picking-the-reward-and-checking-the-capture">选择奖励并检查采集</a></li><li><a href="#deploying-it-and-training-against-it">部署并对其训练</a></li></ol></details><div class="chapter-source">原文发布：2026 年 10 月 1 日 · 非官方译本 · <a href="https://huggingface.co/spaces/FineEnvs/multi-harness-rl">查看原文</a></div><article class="prose" id="content"><h2 id="how-the-framework-works">框架如何运作</h2>
+<p>框架由三部分组成。OpenEnv 是 harness、环境和训练器共同连接的接口，其采集代理负责记录 token。Harbor 提供任务和沙箱。TRL 根据代理记录的数据训练。本章先沿着一次 rollout 贯穿整个系统，再分别介绍每一部分。</p>
+<h3 id="openenv">OpenEnv</h3>
+<p>OpenEnv 是 RL 环境的标准接口 <a class="citation" href="references.html#ref-openenv2026">[19]</a>。它通过客户端与服务器之间的通信，提供类似 <a href="https://gymnasium.farama.org">Gymnasium</a> 的 <code>reset</code>、<code>step</code>、<code>state</code>，采用有类型的动作和观测，打包为 Docker，并可发布到 Hub。它最初由 Meta PyTorch 与 Hugging Face 合作开发，现在位于 <a href="https://github.com/huggingface/OpenEnv"><code>huggingface/OpenEnv</code></a>，由十二家组织组成的委员会指导，采用 BSD-3-Clause 许可。</p>
+<p>本文中，OpenEnv 是 harness、环境和训练器共同连接的共享接口。它不负责训练，也不定义奖励。<strong>采集代理</strong>从任何调用模型 API 的智能体中，记录 RL 训练所需的信息。<strong>Harbor 集成</strong> <a class="citation" href="references.html#ref-openenv2026harbor">[21]</a> 将 Harbor 的容器化任务作为 OpenEnv 环境提供服务，并在每次 rollout 中选择 harness 和沙箱。</p>
+<p>通过有类型的 <code>TrainingTrace</code> API 训练，需要 <a href="https://github.com/huggingface/OpenEnv/releases/tag/v0.7.0">OpenEnv 0.7.0</a> 或更新版本；Harbor 可选依赖需要 <strong>Python 3.12</strong>。在 Python 3.10 或 3.11 下，<code>openenv[harbor]</code> 不会安装 Harbor 依赖。<code>harbor_env</code> 包也来自仓库的 <code>envs/</code> 目录，而非 OpenEnv wheel。若使用 main 分支检出版本：</p>
+<pre><code class="language-bash"># Run in a Python 3.12 virtual environment.
+git clone --depth 1 --branch main https://github.com/huggingface/OpenEnv.git
+python -m pip install -e &#39;./OpenEnv[harbor]&#39;
+export PYTHONPATH=&quot;$PWD/OpenEnv/envs${PYTHONPATH:+:$PYTHONPATH}&quot;
+</code></pre>
+<p>训练器、推理服务器的依赖，以及双 GPU 启动命令，见 TRL 的 <a href="https://github.com/huggingface/trl/tree/main/examples/async_grpo_harbor">Harbor 示例</a>。</p>
+<h3 id="one-rollout-end-to-end">一次 rollout 的端到端流程</h3>
+<p>在深入各部分前，先看完整路径。下图以 <a href="https://huggingface.co/collections/FineEnvs/smoldataenvs">SmolDataEnvs</a> 中的一个三轮 rollout 为例，展示它如何经过系统各部分。这是我们根据真实 Kaggle notebook 构建的数据分析任务集。切换 harness，只会改变 Harbor 将其接到代理的方式、模型请求与回复的格式，以及工具名称。</p>
+<figure id="d3-openenv-system"><div class="fig-title">一次 rollout 如何经过 OpenEnv</div><iframe class="viz-frame" src="../embeds/openenv-00.html" title="一次 rollout 如何经过 OpenEnv" loading="lazy"></iframe><figcaption>从训练器发出请求到权重更新，逐步展示一个三轮 rollout。</figcaption></figure>
+
+
+<p>训练器和推理服务器 vLLM <a class="citation" href="references.html#ref-kwon2023vllm">[22]</a> 各使用一张 GPU。OpenEnv 服务器可以在它们附近运行，也可以放在 Hugging Face Space 中；每个 rollout 都有独立沙箱。实验硬件见<a href="training.html#setup">训练设置</a>。沙箱里的 harness 从不直接与 vLLM 或训练器通信，只通过采集代理访问模型，它为此持有的唯一凭据是一个会话 ID。</p>
+<h3 id="the-capture-proxy">采集代理</h3>
+<p>harness 通过 base URL 和 API key 找到代理，方式与访问普通模型提供商相同。这个 API key 是为当前 rollout 创建的采集会话 ID；这使一个端口上的单个代理能够服务全部并发 rollout。携带未注册 key 的调用会收到 401。</p>
+<figure id="d3-capture-proxy"><div class="fig-title">采集代理</div><iframe class="viz-frame" src="../embeds/openenv-01.html" title="采集代理" loading="lazy"></iframe><figcaption>一次模型调用经过采集代理的逐步流程。</figcaption></figure>
+
+
+<p>如 <a href="why-multi-harness.html#harness-ecosystem-matrix">harness 表格</a>所示，harness 使用四种模型 API。代理依次根据请求路径、请求头、请求体结构判断所用格式。它使用从 NVIDIA Polar 网关 <a class="citation" href="references.html#ref-xu2026polar">[23]</a> 引入项目的转换器，将请求转换为 chat completions，再按调用方自己的格式回放回答。</p>
+<figure id="d3-dialects-funnel"><div class="fig-title">四种 API 方言，统一为一种格式</div><iframe class="viz-frame" src="../embeds/openenv-02.html" title="四种 API 方言，统一为一种格式" loading="lazy"></iframe><figcaption>编码智能体的四种请求格式，以及训练器看到的统一形式。</figcaption></figure>
+
+
+<p>对推理引擎的调用始终采用非流式。代理等待完整补全，保存后，如果 harness 要求流式，就以流的形式向它回放。除了首个 token 到达更晚，harness 察觉不到区别，代理也无需解析不完整的增量片段。</p>
+<h4 id="what-gets-recorded">记录哪些信息</h4>
+<p>每次调用时，代理都向引擎索取提示的 token ID、采样得到的 token ID，以及每个采样 token 的 logprob。它还会从完整分布采样，不采用 <code>top_p</code> 或 <code>top_k</code> 截断。截断分布会使实际采样偏离策略自身的分布，这是 RL 中已知的熵坍缩途径；vLLM 又是在截断后计算 processed logprobs，因此它们也与策略不一致。在我们的实验中，将 <code>top_p</code> 调整为 1.0，使重要性比率从 0.985–0.993 改善到 0.9984–0.9999。在 vLLM 上，需要以下两个服务器参数：</p>
+<pre><code class="language-bash">vllm serve &lt;model&gt; --return-tokens-as-token-ids --logprobs-mode processed_logprobs
+</code></pre>
+<p><a href="https://github.com/sgl-project/sglang">SGLang</a> 也可以使用。<a href="#sglang-note">¹</a></p>
+<p id="sglang-note" class="footnote">¹ SGLang 从 v0.5.17 起，会为非流式请求返回采样 token ID；v0.5.20 又将其加入流式请求。代理对引擎不使用流式，因此 v0.5.17 及更新版本应当可用，不过我们只测试过 SGLang main 分支构建版本。</p>
+
+<p>代理不会盲目信任这些信息。第一次遇到一个引擎时，它会发送探测请求并评定结果，也会检查 logprobs 是 raw 还是 processed。低于 <code>tokens</code> 级别的引擎仍然可以服务 rollout，但会被标记为仅供评估；请求它们的训练数据会触发错误。OpenAI、Anthropic、<a href="https://huggingface.co/docs/inference-providers/index">Hugging Face Inference Providers</a> 等托管 API 属于这一情况，因此可以用来评估 harness，却不能通过它们训练。</p>
+<figure id="d3-capture-levels"><div class="fig-title">三个采集等级</div><iframe class="viz-frame" src="../embeds/openenv-03.html" title="三个采集等级" loading="lazy"></iframe><figcaption>其中只有一个等级能够用于训练。</figcaption></figure>
+
+
+<h4 id="from-calls-to-training-sequences">从调用构建训练序列</h4>
+<p>harness 会重试、启动子智能体、压缩上下文，因此一个 rollout 很少是一段整洁的对话。代理将每次模型调用存为一个节点，再将它连接到更早的某次调用：这次早期调用的提示与补全，必须构成当前提示最长的精确 token 前缀。重试会表现为没有继续延伸的兄弟节点。子智能体有自己的系统提示，所以其第一次调用不会延伸任何已有节点，而会建立新根；压缩后的上下文也一样。</p>
+<figure id="d3-rollout-graph"><div class="fig-title">rollout 图</div><iframe class="viz-frame" src="../embeds/openenv-04.html" title="rollout 图" loading="lazy"></iframe><figcaption>把轨迹表示成模型调用图，并展示可训练的分支。</figcaption></figure>
+
+
+<p>每条从根到叶的路径，都会成为一个训练序列。上下文 token 的损失掩码为 0，采样 token 为 1。如果某轮 logprobs 缺失或没有对齐，这一轮仍作为上下文留在序列中，但绝不作为训练目标。这些检查在调用到达时立即执行，而非等到导出时才做，因为代理仍知道具体轮次时，最容易诊断对齐错误。</p>
+<figure id="d3-token-contract"><div class="fig-title">一次 rollout 返回什么</div><iframe class="viz-frame" src="../embeds/openenv-05.html" title="一次 rollout 返回什么" loading="lazy"></iframe><figcaption>逐轮查看一个 rollout 交回的信息。</figcaption></figure>
+
+
+<h4 id="capturing-your-own-harness">采集你自己的 harness</h4>
+<p>代理没有任何特定依赖于 Harbor 的部分，所以调用这四种 API 之一的任意程序，都能被采集。启动代理，通过 <code>POST /sessions</code> 创建会话，将代理 URL 作为智能体的 base URL，将会话 ID 作为其 API key，再通过 <code>GET /sessions/{id}/rollout</code> 读取 rollout。</p>
+<pre><code class="language-bash">python -m openenv.core.harness.capture.server --llm-url http://127.0.0.1:8000 --model &lt;model&gt;
+</code></pre>
+<p>代理默认绑定 localhost。绑定其他接口时，需要一个 admin key，用于保护创建和读取会话的路由。</p>
+<p>代理是单进程。在我们的实验里，大约 200 个并发会话时，健康检查开始得不到调度；到 320 个时进程崩溃。达到模型调用预算的 rollout，也由代理自己停止，因此这次最终回复不会进入训练数据。</p>
+<h3 id="harbor">Harbor</h3>
+<p><a href="https://harborframework.com/">Harbor</a> 由 Terminal-Bench <a class="citation" href="references.html#ref-merrill2026terminalbench">[8]</a> 背后的团队开发，负责让智能体执行容器化任务，并保持任务、harness 和沙箱彼此独立。<a href="https://github.com/harbor-framework/harbor/releases/tag/v0.22.0">0.22.0 版本</a> 为四十多种 agent harness 提供适配器，并支持 <a href="https://github.com/harbor-framework/harbor/blob/v0.22.0/src/harbor/models/environment_type.py">26 种执行后端</a>，从本地 Docker 到 <a href="https://www.daytona.io">Daytona</a>、<a href="https://modal.com">Modal</a>、E2B。约八十个任务数据集已采用其格式，包括 Terminal-Bench 和 SWE-bench <a class="citation" href="references.html#ref-jimenez2024swebench">[12]</a>。任意 harness 都可以在任意后端尝试任意任务，因此一个任务集能够用于多种 harness 的训练；运行时，一条命令就能指定数据集、智能体和后端。Adithya 在 <a href="https://x.com/adithya_s_k/article/2054961319179420035">《RL 编码环境 101：为什么需要 Harbor》</a> 中解释了它为何适合作为编码 RL 的抽象。</p>
+<p>Harbor 任务是一个包含指令、环境和测试脚本的目录。下方任务来自本文所有实验使用的 SmolDataEnvs。问题源于 <a href="https://huggingface.co/datasets/jupyter-agent/jupyter-agent-dataset">jupyter-agent 数据集</a>中的 Kaggle notebook，每个问题都配有自动评分器。选择一个任务和文件，就能以智能体或验证器看到的方式阅读它。</p>
+<figure id="d3-harbor-task"><div class="fig-title">逐文件查看三个 SmolDataEnvs 任务</div><iframe class="viz-frame" src="../embeds/openenv-06.html" title="逐文件查看三个 SmolDataEnvs 任务" loading="lazy"></iframe><figcaption>一个 Harbor 任务的六个文件，未经修改地取自训练集，并展示奖励如何输出。任务文件保留原文。</figcaption></figure>
+
+
+<p>任务本身不指定 harness、沙箱后端或训练器，因为这些都是运行时选择的。<a href="https://huggingface.co/spaces/HuggingFaceH4/harbor-visualiser">Harbor 可视化工具</a> 以同样方式开放完整的 5,000 个训练任务。</p>
+<iframe class="external-demo" src="https://huggingfaceh4-harbor-visualiser.hf.space/?dataset=FineEnvs/SmolDataEnvs-harbor-train" title="Harbor 可视化工具：SmolDataEnvs 训练集" loading="lazy"></iframe>
+
+<p class="footnote">此在线任务浏览器需要网络；<a href="https://huggingface.co/spaces/HuggingFaceH4/harbor-visualiser">单独打开</a>。</p>
+
+<blockquote>
+<p><strong>说明：</strong> Harbor 将自己的沙箱后端称为 <em>environment</em>。本文中，<em>sandbox</em> 指智能体运行的隔离空间，<em>environment</em> 指 OpenEnv 服务器。</p>
+</blockquote>
+<h3 id="serving-harbor-through-openenv">通过 OpenEnv 提供 Harbor 服务</h3>
+<p>Harbor 已经能让智能体执行任务并返回分数。训练器还需要策略生成的 token 及其概率。Harbor 的 <a href="https://github.com/harbor-framework/harbor/blob/v0.22.0/docs/content/docs/training-workflows/rl.mdx">RL 文档</a> 列出了两种获取方式：在推理服务器处拦截 token，或者让 harness 在结果中返回它们。第二种方式要求 harness 将 token 放进结果元数据；文档指出，Harbor 自有 harness <a href="https://github.com/harbor-framework/harbor/blob/v0.22.0/docs/content/docs/agents/terminus-2.mdx">Terminus 2</a> 的相关支持仍在添加。本集成采用第一种方式，通过采集代理实现，因此适用于任何调用模型 API 的 harness。</p>
+<p>训练器通过 HTTP 与环境通信，而不是在自己的进程内运行 rollout。早先的进程内实现，会让第三方智能体内部的异常传播到训练循环；一个 rank 崩溃后，其他 rank 就会无限等待在 NCCL barrier 上。现在，异常不会跨越这条边界。失败的 rollout 会返回 <code>ok=False</code> 和 <code>reward=None</code>，训练器处理返回值即可，无需捕获异常。</p>
+<h4 id="the-four-commands">四条命令</h4>
+<table>
+<thead>
+<tr>
+<th>命令</th>
+<th>功能</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>openenv harbor info</code></td>
+<td>报告本机能运行什么：引擎是否返回 token ID、哪些沙箱后端凭据可用、哪些数据集能够解析及各自任务数、哪些 harness 已验证。不会启动任何服务。</td>
+</tr>
+<tr>
+<td><code>openenv harbor rollout</code></td>
+<td>不启动环境服务器，直接运行 rollout。如果这里成功、在 <code>serve</code> 下失败，问题就在服务层。</td>
+</tr>
+<tr>
+<td><code>openenv harbor serve</code></td>
+<td>环境服务器：提供 Task API、通过 MCP 暴露的 <code>run_rollout</code> 工具、网页界面，以及采集代理。</td>
+</tr>
+<tr>
+<td><code>openenv harbor push</code></td>
+<td>将同一服务器部署到 Hugging Face Space，配置放在 Space variables 中，凭据放在 secrets 中。</td>
+</tr>
+</tbody></table>
+<pre><code class="language-bash">openenv harbor info    --llm-url $LLM --dataset org/train,org/eval
+openenv harbor rollout --llm-url $LLM --dataset org/train --task-index 0 -n 5 --harness opencode --sandbox e2b
+openenv harbor serve   --dataset org/train,org/eval
+openenv harbor push    --llm-url $LLM --dataset org/train,org/eval --repo-id you/harbor-env
+</code></pre>
+<p><code>rollout</code> 必须指定 <code>--llm-url</code>，且没有默认值，因为过期端点可能产生看似正常、却不含 token ID 的 rollout。<code>serve</code> 可以不带这个参数启动，因为每个 rollout 自己指定引擎。这让一个部署既能服务训练——连接训练器的 vLLM——也能服务评估。这里的 <code>-n 5</code>（或 <code>--n-tasks 5</code>）从 <code>--task-index 0</code> 开始，将任务 0 至 4 各运行一次；它不是对一个任务采样五次尝试。E2B 示例与报告的实验一致，配套教程则使用 Daytona。每个 rollout 完成时会打印一行：</p>
+<pre><code>[opencode / e2b] task 0: 0000_369_369503_qa_1 ...
+   ok    reward=1.00  turns=9  roots=2  multi-turn  tokens=1043  atif=match  48s
+</code></pre>
+<figure id="d3-serve-flow"><div class="fig-title">从 serve 到 rollout</div><iframe class="viz-frame" src="../embeds/openenv-07.html" title="从 serve 到 rollout" loading="lazy"></iframe><figcaption>哪些操作在启动时只发生一次，哪些操作在每个 rollout 中都会发生。</figcaption></figure>
+
+
+<p>接下来两部分介绍各 harness 如何连接代理，以及如何检查奖励和采集结果。完整参考见 <a href="https://huggingface.co/docs/openenv/environments/harbor">OpenEnv 文档的 Harbor 页面</a>。</p>
+<details>
+<summary>各 harness 的接线方式、奖励选择与采集检查</summary>
+
+<h4 id="wiring-each-harness">各 harness 如何接线</h4>
+<p>Harbor 已经知道如何安装和启动每种 harness。OpenEnv 只补充它们从哪里读取模型 URL 和 API key，并以每种 harness 对应一个表项的形式维护。因此，支持新 harness 只需增加表项，无需编写新环境。十种 harness 已在 SmolDataEnvs 测试集的 16,000 次 rollout 中，通过下述采集契约和轨迹检查。</p>
+<figure id="harness-seams"><div class="fig-title">各已验证 harness 如何访问代理</div><iframe class="viz-frame" src="../embeds/openenv-08.html" title="各已验证 harness 如何访问代理" loading="lazy"></iframe><figcaption>每种 harness 从哪里获取代理 URL 和会话 ID。</figcaption></figure>
+
+
+<p>多数 harness 读取环境变量，OpenEnv 只为智能体这次运行设置它们。因此，<a href="https://github.com/openai/codex">Codex</a> 通过 <code>OPENAI_API_KEY</code> 收到的会话 ID，绝不会传到可能需要自身真实 key 的验证器。<a href="https://code.claude.com/docs/en/overview">Claude Code</a> 和 <a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a> 还会读取服务器进程里的变量，因此那里也要设置。<a href="https://opencode.ai">OpenCode</a> 和 <a href="https://pi.dev">Pi</a> 使用写入沙箱的配置文件；Terminus 2 在主机运行，直接接收 URL 和 key。</p>
+<h4 id="picking-the-reward-and-checking-the-capture">选择奖励并检查采集</h4>
+<p>Harbor 验证器可以返回多个具名分数，而 GRPO <a class="citation" href="references.html#ref-shao2024deepseekmath">[24]</a> 要求每个 rollout 只有一个数值。如果只有一个分数，集成直接使用它；否则优先使用名为 <code>reward</code> 的分数，再否则要求调用方选择。集成绝不自行组合分数，因为无论选择怎样的权重，都会成为训练目标。早期一次实验包含“只要提交任何内容就加 0.2”的奖励项，策略学会立即提交；留出集准确率从 0.740 跌至 0.178，而训练奖励看起来仍然正常。如果验证器根本未运行，奖励会始终以 <code>None</code> 传到训练器，因此沙箱崩溃不会被当作答案错误。</p>
+<p>代理自身的检查只能查看它采集到的数据。为了独立验证，还会逐调用比较每个 rollout 与 Harbor 自己写出的 <a href="https://docs.harborframework.com/core-concepts/agents/atif">ATIF</a> 轨迹文件：轮数、每次调用的补全 token 数，以及哪些调用算作智能体步骤。任何不一致都会让 rollout 失败。</p>
+<pre><code>ATIF completion_tokens : [37, 36, 104, 264, 255, 119, 32, 27]   total 874
+intercept turn_lengths : [37, 36, 104, 264, 255, 119, 32, 27]   total 874
+ATIF step-1 prompt_tokens 7990  ==  intercept prompt_len 7990
+</code></pre>
+<p>这项检查发现，一种 harness 发送了空 tools 数组，导致推理服务器返回 400，rollout 被提前截断，却留下了一个看似结构正确的图。现在代理会在转发前移除空 tools 数组。</p>
+</details>
+
+<h4 id="deploying-it-and-training-against-it">部署并对其训练</h4>
+<p>在单台机器上，<code>serve</code> 监听两个端口：一个用于训练器和网页界面，一个用于采集代理。沙箱通常在其他地方运行，因此通过隧道让沙箱访问代理，使用 <code>--expose</code> 设置，默认由 <a href="https://www.gradio.app">Gradio</a> 提供。当服务器自身运行在 Hugging Face Space 上时，只有一个端口，因此代理挂载到 <code>/capture</code>。这个 Space 必须公开，因为沙箱中的智能体不能发送私有 Space 要求的认证头。安全性来自代理只响应已注册会话 ID，且创建会话需要 admin key。沙箱自身仍位于 E2B 或其他 Harbor 后端，每个 rollout 一个。</p>
+<p>训练前，应提高服务器并发限制 <code>max_concurrent_envs</code>。它限制单个服务器同时运行多少 rollout；默认值四，小于我们每个 GRPO 组里的八个 rollout。超过限制时，<code>serve</code> 会以 <code>CAPACITY_REACHED</code> 拒绝新 rollout。</p>
+<p>OpenEnv 的 <code>HarborSessionFactory</code> 生成符合 TRL <code>HarnessRolloutWorker</code> 预期的会话，适用于智能体掌握循环的情况。该 worker 通过 <a href="https://github.com/huggingface/trl/pull/6947">TRL #6947</a> 合并，位于 <code>trl.experimental</code>。截至 2026 年 10 月 1 日，它已在 main 分支中，但尚未进入最新发布版 v1.14.1；下一版本发布前，需要从 main 安装 TRL：</p>
+<pre><code class="language-bash">python -m pip install &#39;trl @ git+https://github.com/huggingface/trl.git@main&#39;
+</code></pre>
+<p>每个会话请求一个 rollout，等待完成，再通过 <code>fetch_training_trace()</code> 返回有类型的 <code>TrainingTrace</code>，其中包含 token ID、行为策略 logprobs 和损失掩码。TRL 直接消费这个对象。给定准备好的任务数据集和模型 tokenizer，worker 的接线代码如下：</p>
+<pre><code class="language-python">from functools import partial
+
+from harbor_env.harness import HarborSessionFactory
+from trl.experimental.async_grpo.openenv_harness import HarnessRolloutWorker
+
+
+def correctness_reward(outcome):
+    return outcome.env_reward  # None keeps a failed verifier unscorable.
+
+
+def make_rollout_worker(dataset, tokenizer, server_url, vllm_url, model):
+    factory = partial(
+        HarborSessionFactory,
+        server_url=server_url,
+        split=&quot;FineEnvs/SmolDataEnvs-harbor-train&quot;,
+        llm_url=vllm_url,
+        model=model,
+        harness=&quot;opencode&quot;,
+        sandbox=&quot;daytona&quot;,
+        reward_key=&quot;correctness,reward&quot;,
+    )
+    return HarnessRolloutWorker(
+        harness_session_factory=factory,
+        harness_adapter=None,
+        rollout_reward_fn=correctness_reward,
+        model_name=model,
+        dataset=dataset,
+        processing_class=tokenizer,
+        reward_funcs=[],
+        num_generations=8,
+        max_inflight_tasks=8,
+        vllm_server_url=vllm_url,
+        max_tokens=4096,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=-1,
+        chat_template_kwargs={&quot;enable_thinking&quot;: False},
+    )
+</code></pre>
+<p>将这个 worker 作为 <code>rollout_worker</code> 传给 <code>AsyncGRPOTrainer</code>。worker 在生成前使用 <code>sampling=</code> 调用工厂，让采集策略与训练保持一致。<code>harness_adapter=None</code> 让 harness 运行自己的循环。这个最小回调只转发正确性奖励；<a href="training.html#what-we-rewarded">训练设置</a>还加入了工具效率加分。<a href="https://github.com/huggingface/trl/blob/main/examples/async_grpo_harbor/async_grpo_harbor.py">完整 TRL 示例</a> 还展示了任务发现、<code>AsyncGRPOConfig</code>、训练器和 checkpoint 保存。</p>
+<p>我们的实验中，同一个 GRPO 组内所有 rollout 都使用相同 harness，因此 advantage 比较的是动作，而非 harness。每个 rollout 使用的采样温度，也与训练器重新计算 logprobs 时使用的温度一致。</p>
+<p>可以尝试 <a href="https://huggingface.co/spaces/FineEnvs/smoldataenv-multi-harness-harbor">SmolDataEnvs Harbor Space</a>：选择任务、连接模型、运行 harness，再检查 rollout 与轨迹。<a href="https://github.com/adithya-s-k/FineEnvs/tree/main/05-multi-harness-rl">训练教程</a> 包含同样的环境源码，以及用于 HF Jobs 或本地集群的命令。</p>
+</article><nav class="pager"><a href="why-multi-harness.html"><span class="dir">← 上一章</span><div class="ttl">为什么要跨 harness 训练</div></a><a class="next" href="training.html"><span class="dir">下一章 →</span><div class="ttl">跨 harness 训练小模型</div></a></nav><footer class="pagefoot">非官方简体中文译本 · 原作：<a href="https://huggingface.co/spaces/FineEnvs/multi-harness-rl">Hugging Face / FineEnvs</a>（Hugging Face、Liquid AI） · <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> · 本译本修改了语言与阅读布局；第三方图像及标志沿用原署名。</footer></main></div><script src="../assets/reading.js"></script></body></html>

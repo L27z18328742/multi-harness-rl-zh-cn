@@ -1,0 +1,38 @@
+{
+  "introduction": {
+    "headings": 1,
+    "code_blocks": 0,
+    "embeds": 0
+  },
+  "basics": {
+    "headings": 6,
+    "code_blocks": 0,
+    "embeds": 6
+  },
+  "why-multi-harness": {
+    "headings": 6,
+    "code_blocks": 0,
+    "embeds": 7
+  },
+  "openenv": {
+    "headings": 13,
+    "code_blocks": 8,
+    "embeds": 9
+  },
+  "training": {
+    "headings": 18,
+    "code_blocks": 0,
+    "embeds": 14
+  },
+  "conclusions": {
+    "headings": 1,
+    "code_blocks": 0,
+    "embeds": 0
+  },
+  "totals": {
+    "headings": 45,
+    "code_blocks": 8,
+    "embeds": 36,
+    "citations": 24
+  }
+}

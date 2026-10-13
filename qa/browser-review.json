@@ -1,0 +1,28 @@
+{
+  "reviewed": "2026-10-03",
+  "browser": "Codex In-app Browser",
+  "viewports": [
+    {
+      "width": 1280,
+      "height": 900
+    },
+    {
+      "width": 390,
+      "height": 844
+    }
+  ],
+  "checks": [
+    "Opened all 36 chart instances; fixed an unload-time observer error found during rapid navigation",
+    "GRPO group selector changes to mixed results",
+    "SFT epoch selector changes to epoch 1",
+    "Link into Qwen collapsed section opens it",
+    "Mobile reading page has no document-level horizontal overflow",
+    "After chart loading, accuracy anchor remains at 80px below viewport top",
+    "No console errors in final isolated chapter preview"
+  ],
+  "screenshots": [
+    "desktop-index.jpg",
+    "mobile-reading.jpg",
+    "desktop-training.jpg"
+  ]
+}

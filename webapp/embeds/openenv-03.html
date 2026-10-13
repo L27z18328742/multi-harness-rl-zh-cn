@@ -1,0 +1,61 @@
+<!doctype html><html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="../assets/style.css"><link rel="stylesheet" href="../assets/reading.css">
+<style>html{scroll-behavior:auto}body{background:var(--panel);margin:0;font-size:14px;line-height:1.6;padding:0 2px}img{max-width:100%}svg{font-family:var(--sans)}[data-config]{width:100%;display:flow-root}</style>
+<script src="../assets/color-palettes.js"></script><script src="../assets/i18n.js"></script></head>
+<body><div data-config="{}"><div class="capture-levels" style="width:100%;margin:14px 0;"></div>
+<style>
+  .capture-levels { position: relative; }
+  .capture-levels svg { display:block; width:100%; height:auto; overflow:visible; }
+  .capture-levels .lg { display:flex; flex-wrap:wrap; gap:6px 18px; margin-top:12px; font-size:12px; color:var(--muted-color); }
+  .capture-levels .lg-t { width:100%; font-size:11px; letter-spacing:.08em; text-transform:uppercase; opacity:.75; }
+  .capture-levels .k { display:inline-flex; align-items:center; gap:7px; }
+  .capture-levels .sw { width:13px; height:3px; border-radius:2px; }
+  .capture-levels .nt { margin-top:10px; font-size:12px; line-height:1.5; color:var(--muted-color); }
+</style>
+<script>
+  (() => {
+    const C = 'capture-levels';
+    const boot = () => {
+      const n = [...document.querySelectorAll('.'+C)].filter(e => e.dataset.mounted !== 'true');
+      const r = n[n.length-1]; if (!r) return; r.dataset.mounted = 'true';
+      const V = (k,f) => (getComputedStyle(r).getPropertyValue(k).trim() || f);
+      const P = (i) => {
+        if (window.ColorPalettes && window.ColorPalettes.categorical) {
+          try { return window.ColorPalettes.categorical(4)[i%4]; } catch(e) {}
+        }
+        return ['rgb(78,165,183)','rgb(146,176,234)','rgb(206,192,250)','rgb(232,137,171)'][i%4];
+      };
+      const draw = () => {
+        const W = Math.max(320, r.clientWidth);
+        const bd = V('--border-color','rgba(128,128,128,.3)');
+        const mu = V('--muted-color','rgba(128,128,128,.8)');
+        const tx = V('--text-color','#16181d');
+        const sf = V('--surface-bg','#fff');
+        const L = [
+          ['tokens','提示 ID、采样 ID、已对齐的 logprobs','trainable', 0],
+          ['logprobs','只有 logprobs，没有可对应的 ID','eval only', 3],
+          ['text','neither','eval only', 3],
+        ];
+        const rowH = 54, H = 30 + L.length*rowH;
+        const lx = Math.min(130, W*0.17), rx = W - 16;
+        let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Three levels of capture and which of them can be trained against">`;
+        L.forEach((l,i) => {
+          const y = 34 + i*rowH, ok = l[3] === 0, c = P(l[3]);
+          s += `<rect x="0" y="${y-20}" width="${W}" height="${rowH-12}" rx="8" fill="${c}" fill-opacity="${ok?.07:.04}"/>`;
+          s += `<text x="14" y="${y+2}" font-size="13" font-weight="700" fill="${ok?tx:mu}" font-family="ui-monospace,Menlo,monospace">${l[0]}</text>`;
+          s += `<text x="${lx}" y="${y+2}" font-size="12" fill="${ok?tx:mu}">${l[1]}</text>`;
+          s += `<text x="${rx}" y="${y+2}" text-anchor="end" font-size="11.5" font-weight="600" fill="${c}">${l[2]}</text>`;
+        });
+        s += '</svg>';
+        r.innerHTML = s + `<div class="nt">没有 token ID 参数的引擎仍会正常回答，因此代理会探测并评定每个引擎。低于 tokens 等级的 rollout 只能用于评估。</div>`;
+      };
+      draw();
+      // Colours are read when drawing, so redraw when the reader switches theme.
+      new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+      if ('ResizeObserver' in window) { let t; new ResizeObserver(()=>{clearTimeout(t);t=setTimeout(draw,120);}).observe(r); }
+      else window.addEventListener('resize', draw);
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  })();
+</script>
+</div><script src="../assets/embed-size.js"></script></body></html>

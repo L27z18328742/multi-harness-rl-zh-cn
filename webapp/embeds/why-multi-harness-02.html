@@ -1,0 +1,145 @@
+<!doctype html><html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="../assets/style.css"><link rel="stylesheet" href="../assets/reading.css">
+<style>html{scroll-behavior:auto}body{background:var(--panel);margin:0;font-size:14px;line-height:1.6;padding:0 2px}img{max-width:100%}svg{font-family:var(--sans)}[data-config]{width:100%;display:flow-root}</style>
+<script src="../assets/color-palettes.js"></script><script src="../assets/i18n.js"></script></head>
+<body><div data-config="{}"><div class="overfit-modes" style="width:100%;margin:14px 0;"></div>
+<style>
+  .overfit-modes { position: relative; }
+  .overfit-modes svg { display:block; width:100%; height:auto; overflow:visible; }
+  .overfit-modes .nt { margin-top:10px; font-size:12px; line-height:1.55; color:var(--muted-color); }
+</style>
+<script>
+  (() => {
+    const C = 'overfit-modes';
+    const boot = () => {
+      const n = [...document.querySelectorAll('.'+C)].filter(e => e.dataset.mounted !== 'true');
+      const r = n[n.length-1]; if (!r) return; r.dataset.mounted = 'true';
+      const V = (k,f) => (getComputedStyle(r).getPropertyValue(k).trim() || f);
+      const P = (i) => {
+        if (window.ColorPalettes && window.ColorPalettes.categorical) {
+          try { return window.ColorPalettes.categorical(4)[i%4]; } catch(e) {}
+        }
+        return ['rgb(78,165,183)','rgb(146,176,234)','rgb(206,192,250)','rgb(232,137,171)'][i%4];
+      };
+      const esc = (t) => t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+      // The three modes are KAT-Coder's. The examples are the concrete form each
+      // one takes in a model call, so the row is readable without the chapter text.
+      const MODES = [
+        {
+          name:'Format',
+          gloss:'依赖一种动作格式',
+          trained:{ h:'在工具调用 harness 中训练', code:'"tool_calls": [{"name": "edit_file", …}]' },
+          foreign:{ h:'换到接收文本编辑块的 aider', code:'<<<<<<< SEARCH … ======= … >>>>>>> REPLACE' },
+          seen:'JSON 以聊天文本到达；没有内容被解析或编辑，这一轮被判为未回答。'
+        },
+        {
+          name:'Context structure',
+          gloss:'依赖一种历史组织方式',
+          trained:{ h:'训练时，每个工具结果都作为独立消息', code:'role: "tool" → 每结果一条消息' },
+          foreign:{ h:'换到会压缩历史的 harness', code:'role: "user" → 一个摘要轮次' },
+          seen:'早期结果不再位于预期位置，因此模型重复已完成的工作。'
+        },
+        {
+          name:'Control flow',
+          gloss:'依赖外部的重试与停止规则',
+          trained:{ h:'训练时，harness 代为重试', code:'exit 1 → harness 重试，并在第 N 步停止' },
+          foreign:{ h:'换到只报告结果并等待的 harness', code:'exit 1 → 将错误返回模型' },
+          seen:'它再次运行同一条失败命令，因为它从未负责决定何时停止。'
+        },
+      ];
+
+      const draw = () => {
+        const W = Math.max(320, r.clientWidth);
+        const bd = V('--border-color','rgba(128,128,128,.3)');
+        const mu = V('--muted-color','rgba(128,128,128,.8)');
+        const tx = V('--text-color','#16181d');
+        const narrow = W < 680;
+
+        const pad = 14;
+        const labW = narrow ? 0 : 168;                 // stacked on narrow screens
+        const colGap = 14;
+        const bodyX = labW ? labW + colGap : pad;
+        const bodyW = W - bodyX - pad;
+        const colW = (bodyW - colGap) / 2;
+        const fsMono = narrow ? 9.5 : 10.5;
+        const fs = narrow ? 11 : 12;
+
+        // monospace wraps on a character budget; prose wraps on a wider one
+        const wrapChars = (t, px, perChar) => {
+          const limit = Math.max(8, Math.floor(px / perChar));
+          const out = []; let cur = '';
+          t.split(' ').forEach(w => {
+            if ((cur + ' ' + w).trim().length > limit) { out.push(cur); cur = w; }
+            else cur = (cur + ' ' + w).trim();
+          });
+          if (cur) out.push(cur);
+          return out;
+        };
+
+        const rows = MODES.map(m => {
+          const tl = wrapChars(m.trained.code, colW - 20, fsMono * 0.60);
+          const fl = wrapChars(m.foreign.code, colW - 20, fsMono * 0.60);
+          const th = wrapChars(m.trained.h, colW, fs * 0.52);
+          const fh = wrapChars(m.foreign.h, colW, fs * 0.52);
+          const sn = wrapChars(m.seen, bodyW, fs * 0.56);
+          const codeLines = Math.max(tl.length, fl.length);
+          const headLines = Math.max(th.length, fh.length);
+          const labLines = narrow ? 2 : 0;
+          // ends 12px below the last line of the symptom text, which starts 76px + the head and code lines down
+          const h = 72 + labLines*18 + headLines*15 + codeLines*15 + sn.length*16;
+          return {m, tl, fl, th, fh, sn, codeLines, headLines, h};
+        });
+
+        const H = rows.reduce((a,b) => a + b.h + 12, 6);
+        let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Three ways a model overfits to its harness, each with the concrete form it takes: a format it keeps emitting, a history layout it expects, and retry rules it leans on.">`;
+
+        let y = 6;
+        rows.forEach((row, i) => {
+          const c = P(i);
+          const m = row.m;
+          s += `<rect x="0" y="${y}" width="${W}" height="${row.h}" rx="10" fill="${c}" fill-opacity=".05"/>`;
+          s += `<rect x="0" y="${y}" width="3" height="${row.h}" rx="1.5" fill="${c}"/>`;
+
+          let ty = y + 22;
+          if (narrow) {
+            s += `<text x="${pad}" y="${ty}" font-size="${fs+1}" font-weight="700" fill="${tx}">${m.name} overfitting</text>`;
+            s += `<text x="${pad}" y="${ty+16}" font-size="${fs-1}" fill="${mu}">${m.gloss}</text>`;
+            ty += 36;
+          } else {
+            s += `<text x="${pad}" y="${y+24}" font-size="${fs+1}" font-weight="700" fill="${tx}">${m.name}</text>`;
+            s += `<text x="${pad}" y="${y+40}" font-size="${fs-1}" fill="${mu}">overfitting</text>`;
+            const gl = wrapChars(m.gloss, labW - pad, (fs-1) * 0.52);
+            gl.forEach((ln,j) => s += `<text x="${pad}" y="${y+62+j*14}" font-size="${fs-1.5}" fill="${mu}">${ln}</text>`);
+          }
+
+          // two columns: what it was trained against, what it was dropped into
+          [[0, m.trained, row.th, row.tl, c], [1, m.foreign, row.fh, row.fl, P(3)]].forEach(([k, side, heads, code, col]) => {
+            const x = bodyX + k*(colW + colGap);
+            heads.forEach((ln,j) => s += `<text x="${x}" y="${ty + j*15}" font-size="${fs}" font-weight="${j===0?600:400}" fill="${k ? P(3) : tx}">${ln}</text>`);
+            const cy = ty + row.headLines*15 + 6;
+            s += `<rect x="${x}" y="${cy}" width="${colW}" height="${row.codeLines*15 + 12}" rx="6" fill="${V('--surface-bg','#fff')}" stroke="${bd}"/>`;
+            code.forEach((ln,j) => s += `<text x="${x+10}" y="${cy + 17 + j*15}" font-size="${fsMono}" fill="${col}" font-family="ui-monospace,Menlo,monospace">${esc(ln)}</text>`);
+          });
+
+          // the symptom, spanning both columns
+          const sy = ty + row.headLines*15 + 6 + row.codeLines*15 + 12 + 36;
+          row.sn.forEach((ln,j) => s += `<text x="${bodyX}" y="${sy + j*16}" font-size="${fs}" fill="${mu}">${j===0 ? '' : ''}${ln}</text>`);
+          s += `<text x="${bodyX}" y="${sy-16}" font-size="${fs-2}" fill="${mu}" font-family="ui-monospace,Menlo,monospace" letter-spacing="1">WHAT YOU SEE</text>`;
+
+          y += row.h + 12;
+        });
+        s += '</svg>';
+
+        r.innerHTML = s + `<div class="nt">三种模式来自 KAT-Coder 报告。共同解决办法：训练时改变 harness。</div>`;
+      };
+      draw();
+      // Colours are read when drawing, so redraw when the reader switches theme.
+      new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+      if ('ResizeObserver' in window) { let t; new ResizeObserver(()=>{clearTimeout(t);t=setTimeout(draw,120);}).observe(r); }
+      else window.addEventListener('resize', draw);
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  })();
+</script>
+</div><script src="../assets/embed-size.js"></script></body></html>
